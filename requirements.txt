@@ -5,3 +5,6 @@ faiss-cpu
 openai
 torch
 numpy
+gtts
+requests
+streamlit-mic-recorder
