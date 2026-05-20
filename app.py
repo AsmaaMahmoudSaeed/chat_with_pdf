@@ -3,32 +3,35 @@ os.environ["STREAMLIT_WATCHER_TYPE"] = "none"
 
 import streamlit as st
 from PyPDF2 import PdfReader
-from sklearn.feature_extraction.text import TfidfVectorizer
+import numpy as np
+from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 from openai import OpenAI
 from gtts import gTTS
 import tempfile
 import requests
 import time
-import base64
 
 # =========================
 # CONFIG
 # =========================
 
-st.set_page_config(page_title="AI PDF Tutor (D-ID)", layout="wide")
+st.set_page_config(
+    page_title="AI Smart Teacher",
+    layout="wide"
+)
 
-st.title("📄🤖 AI PDF Tutor (D-ID Avatar)")
+st.title("📘🤖 AI Smart Teacher (Advanced RAG)")
 
-st.write("Powered by D-ID Avatar System")
+st.write("مدرس ذكي يعتمد على محتوى PDF فقط")
 
 # =========================
-# SECRETS
+# KEYS
 # =========================
 
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 DID_API_KEY = st.secrets["DID_API_KEY"]
-DID_API_URL = "https://api.d-id.com/talks"
+YOUTUBE_API_KEY = st.secrets["YOUTUBE_API_KEY"]
 
 client = OpenAI(
     api_key=GROQ_API_KEY,
@@ -36,40 +39,63 @@ client = OpenAI(
 )
 
 # =========================
-# PDF
+# EMBEDDING MODEL
+# =========================
+
+@st.cache_resource
+def load_model():
+    return SentenceTransformer(
+        "paraphrase-multilingual-MiniLM-L12-v2"
+    )
+
+model = load_model()
+
+# =========================
+# PDF EXTRACTION
 # =========================
 
 def extract_pdf(file):
     reader = PdfReader(file)
     text = ""
-    for p in reader.pages:
-        t = p.extract_text()
+    for page in reader.pages:
+        t = page.extract_text()
         if t:
-            text += t
+            text += t + "\n"
     return text
 
+# =========================
+# CHUNKING
+# =========================
 
 def chunk_text(text, size=500):
     return [text[i:i+size] for i in range(0, len(text), size)]
 
 # =========================
-# SEARCH (TF-IDF)
+# BUILD EMBEDDINGS
 # =========================
 
-def build_index(chunks):
-    vectorizer = TfidfVectorizer()
-    vectors = vectorizer.fit_transform(chunks)
-    return vectorizer, vectors
-
-
-def search(query, vectorizer, vectors, chunks):
-    qv = vectorizer.transform([query])
-    scores = cosine_similarity(qv, vectors).flatten()
-    idx = scores.argsort()[-3:][::-1]
-    return [chunks[i] for i in idx]
+def build_embeddings(chunks):
+    embeddings = model.encode(chunks)
+    return np.array(embeddings, dtype=np.float32)
 
 # =========================
-# TTS fallback
+# SEMANTIC SEARCH
+# =========================
+
+def search(query, chunks, embeddings):
+
+    q_emb = model.encode([query])
+
+    scores = cosine_similarity(q_emb, embeddings).flatten()
+
+    top_idx = scores.argsort()[-4:][::-1]
+
+    context = " ".join([chunks[i] for i in top_idx])
+
+    return context
+
+# =========================
+# TTS
 # =========================
 
 def speak(text):
@@ -79,7 +105,7 @@ def speak(text):
     return file.name
 
 # =========================
-# D-ID AVATAR VIDEO
+# D-ID VIDEO
 # =========================
 
 def generate_did_video(text):
@@ -102,21 +128,24 @@ def generate_did_video(text):
     }
 
     try:
-        r = requests.post(DID_API_URL, json=payload, headers=headers)
-        data = r.json()
+        r = requests.post(
+            "https://api.d-id.com/talks",
+            json=payload,
+            headers=headers
+        )
 
-        st.write("D-ID Response")
-        st.json(data)
+        data = r.json()
 
         talk_id = data.get("id")
         if not talk_id:
             return None
 
-        # polling
-        status_url = f"https://api.d-id.com/talks/{talk_id}"
-
         for _ in range(30):
-            res = requests.get(status_url, headers=headers)
+            res = requests.get(
+                f"https://api.d-id.com/talks/{talk_id}",
+                headers=headers
+            )
+
             s = res.json()
 
             if s.get("status") == "done":
@@ -129,104 +158,116 @@ def generate_did_video(text):
 
         return None
 
-    except Exception as e:
-        st.error(f"D-ID Error: {e}")
+    except:
         return None
 
 # =========================
 # YOUTUBE
 # =========================
 
-def search_youtube(query):
-    key = st.secrets["YOUTUBE_API_KEY"]
+def youtube(query):
 
     url = "https://www.googleapis.com/youtube/v3/search"
 
     params = {
         "part": "snippet",
         "q": query + " شرح عربي",
-        "key": key,
+        "key": YOUTUBE_API_KEY,
         "maxResults": 3,
-        "type": "video",
-        "relevanceLanguage": "ar"
+        "type": "video"
     }
 
     r = requests.get(url, params=params)
     data = r.json()
 
-    videos = []
+    vids = []
 
-    for item in data.get("items", []):
-        vid = item["id"]["videoId"]
-        title = item["snippet"]["title"]
-        videos.append({
+    for i in data.get("items", []):
+        vid = i["id"]["videoId"]
+        title = i["snippet"]["title"]
+
+        vids.append({
             "title": title,
             "url": f"https://www.youtube.com/watch?v={vid}"
         })
 
-    return videos
+    return vids
 
 # =========================
-# SESSION
+# SESSION STATE
 # =========================
 
-if "vectorizer" not in st.session_state:
-    st.session_state.vectorizer = None
-    st.session_state.vectors = None
+if "chunks" not in st.session_state:
     st.session_state.chunks = None
+    st.session_state.embeddings = None
 
 # =========================
-# UI
+# UPLOAD PDF
 # =========================
 
-file = st.file_uploader("Upload PDF", type="pdf")
+file = st.file_uploader("📄 Upload PDF", type="pdf")
 
-if file and st.session_state.vectorizer is None:
+if file:
+
     text = extract_pdf(file)
+
     chunks = chunk_text(text)
 
-    vectorizer, vectors = build_index(chunks)
+    embeddings = build_embeddings(chunks)
 
-    st.session_state.vectorizer = vectorizer
-    st.session_state.vectors = vectors
     st.session_state.chunks = chunks
 
-    st.success("PDF Loaded ✅")
+    st.session_state.embeddings = embeddings
 
-question = st.text_input("Ask your question")
+    st.success("PDF جاهز ✅")
 
 # =========================
-# MAIN LOGIC
+# QUESTION
 # =========================
 
-if question and st.session_state.vectorizer:
+q = st.text_input("✍️ اسأل سؤال")
+
+# =========================
+# MAIN
+# =========================
+
+if q and st.session_state.chunks is not None:
 
     context = search(
-        question,
-        st.session_state.vectorizer,
-        st.session_state.vectors,
-        st.session_state.chunks
+        q,
+        st.session_state.chunks,
+        st.session_state.embeddings
     )
 
     prompt = f"""
-    أجب من النص فقط:
+أنت مدرس ذكي.
+أجب فقط من النص التالي.
 
-    {context}
+إذا لم تجد الإجابة قل: "غير موجود في المحتوى"
 
-    السؤال: {question}
-    """
+النص:
+{context}
+
+السؤال:
+{q}
+"""
 
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[
-            {"role": "system", "content": "أنت مدرس عربي"},
+            {"role": "system", "content": "مدرس عربي دقيق"},
             {"role": "user", "content": prompt}
-        ]
+        ],
+        temperature=0.2
     )
 
     answer = response.choices[0].message.content
 
-    st.subheader("📌 Answer")
+    # =========================
+    # OUTPUT
+    # =========================
+
+    st.subheader("📌 الإجابة")
     st.write(answer)
 
     # AUDIO
@@ -237,30 +278,23 @@ if question and st.session_state.vectorizer:
     # D-ID VIDEO
     # =========================
 
-    st.subheader("🎬 AI Avatar (D-ID)")
+    st.subheader("🎬 شرح بالفيديو")
 
-    with st.spinner("Generating video..."):
-        video = generate_did_video(answer)
+    video = generate_did_video(answer)
 
     if video:
-        st.success("Video Ready ✅")
         st.video(video)
     else:
-        st.warning("Fallback Mode (Audio only)")
-        st.info("D-ID video generation failed")
+        st.warning("تعذر إنشاء فيديو (D-ID)")
 
     # =========================
     # YOUTUBE
     # =========================
 
-    st.subheader("🎥 YouTube Explanation")
+    st.subheader("🎥 فيديوهات شرح")
 
-    try:
-        vids = search_youtube(question)
+    vids = youtube(q)
 
-        for v in vids:
-            st.write(v["title"])
-            st.video(v["url"])
-
-    except:
-        st.warning("YouTube error")
+    for v in vids:
+        st.write(v["title"])
+        st.video(v["url"])
