@@ -1,6 +1,7 @@
 import os
 
 os.environ["STREAMLIT_WATCHER_TYPE"] = "none"
+
 import streamlit as st
 from PyPDF2 import PdfReader
 from sentence_transformers import SentenceTransformer
@@ -35,7 +36,7 @@ YOUTUBE_API_KEY = st.secrets["YOUTUBE_API_KEY"]
 HEYGEN_API_KEY = st.secrets["HEYGEN_API_KEY"]
 
 # =========================================
-# Groq Client
+# GROQ CLIENT
 # =========================================
 
 client = OpenAI(
@@ -44,7 +45,7 @@ client = OpenAI(
 )
 
 # =========================================
-# Embedding Model
+# تحميل نموذج Embedding
 # =========================================
 
 @st.cache_resource
@@ -57,7 +58,7 @@ def load_embedding_model():
 embedding_model = load_embedding_model()
 
 # =========================================
-# استخراج النص من PDF
+# قراءة PDF
 # =========================================
 
 def extract_text_from_pdf(pdf_file):
@@ -140,7 +141,7 @@ def search(query, index, chunks, k=3):
     return results
 
 # =========================================
-# تحويل النص إلى صوت
+# Text To Speech
 # =========================================
 
 def text_to_speech(text):
@@ -240,9 +241,7 @@ def generate_heygen_video(answer_text):
 
                     "type": "text",
 
-                    "input_text": answer_text,
-
-                    "voice_id": "ar-SA-HamedNeural"
+                    "input_text": answer_text
                 },
 
                 "background": {
@@ -255,47 +254,107 @@ def generate_heygen_video(answer_text):
         ]
     }
 
-    response = requests.post(
-        url,
-        headers=headers,
-        json=payload
-    )
+    try:
 
-    data = response.json()
+        response = requests.post(
+            url,
+            headers=headers,
+            json=payload,
+            timeout=60
+        )
 
-    if "data" not in data:
+        data = response.json()
+
+        st.write("HeyGen Response:")
+        st.json(data)
+
+        # =====================================
+        # التحقق من وجود data
+        # =====================================
+
+        if "data" not in data:
+
+            st.error("HeyGen API Error")
+
+            return None
+
+        video_id = data["data"].get(
+            "video_id"
+        )
+
+        if not video_id:
+
+            st.error("No video_id returned")
+
+            return None
+
+        # =====================================
+        # متابعة حالة الفيديو
+        # =====================================
+
+        status_url = (
+            f"https://api.heygen.com/v1/video_status.get"
+            f"?video_id={video_id}"
+        )
+
+        for _ in range(30):
+
+            status_response = requests.get(
+                status_url,
+                headers=headers
+            )
+
+            status_data = status_response.json()
+
+            st.write(status_data)
+
+            if "data" not in status_data:
+
+                time.sleep(5)
+
+                continue
+
+            status = status_data["data"].get(
+                "status"
+            )
+
+            # =================================
+            # completed
+            # =================================
+
+            if status == "completed":
+
+                return status_data["data"].get(
+                    "video_url"
+                )
+
+            # =================================
+            # failed
+            # =================================
+
+            elif status == "failed":
+
+                st.error(
+                    "Video generation failed"
+                )
+
+                return None
+
+            time.sleep(5)
+
+        st.warning(
+            "Video generation timeout"
+        )
 
         return None
 
-    video_id = data["data"]["video_id"]
+    except Exception as e:
 
-    # =====================================
-    # انتظار تجهيز الفيديو
-    # =====================================
-
-    status_url = (
-        f"https://api.heygen.com/v1/video_status.get?video_id={video_id}"
-    )
-
-    for _ in range(30):
-
-        status_response = requests.get(
-            status_url,
-            headers=headers
+        st.error(
+            f"HeyGen Exception: {e}"
         )
 
-        status_data = status_response.json()
-
-        if (
-            "data" in status_data and
-            status_data["data"]["status"] == "completed"
-        ):
-
-            return status_data["data"]["video_url"]
-
-        time.sleep(5)
-
-    return None
+        return None
 
 # =========================================
 # رفع PDF
@@ -306,114 +365,161 @@ uploaded_file = st.file_uploader(
     type="pdf"
 )
 
+# =========================================
+# Session State
+# =========================================
+
+if "index" not in st.session_state:
+
+    st.session_state.index = None
+
+if "chunks" not in st.session_state:
+
+    st.session_state.chunks = None
+
+# =========================================
+# معالجة PDF
+# =========================================
+
 if uploaded_file is not None:
 
-    with st.spinner("جاري معالجة PDF ..."):
+    if st.session_state.index is None:
 
-        pdf_text = extract_text_from_pdf(
-            uploaded_file
-        )
+        with st.spinner(
+            "جاري معالجة PDF ..."
+        ):
 
-        chunks = split_text(pdf_text)
-
-        index = create_faiss_index(
-            chunks
-        )
-
-    st.success("تمت معالجة الملف بنجاح ✅")
-
-    # =====================================
-    # سؤال نصي
-    # =====================================
-
-    text_question = st.text_input(
-        "✍️ اكتب سؤالك"
-    )
-
-    # =====================================
-    # سؤال صوتي
-    # =====================================
-
-    st.write("🎤 أو اسأل بالصوت")
-
-    try:
-
-        audio = mic_recorder(
-            start_prompt="ابدأ التسجيل",
-            stop_prompt="إيقاف التسجيل",
-            key="mic"
-        )
-
-    except Exception as e:
-
-        st.error(f"Microphone Error: {e}")
-
-        audio = None
-
-    voice_question = None
-
-    # =====================================
-    # تحويل الصوت إلى نص
-    # =====================================
-
-    if audio:
-
-        audio_bytes = audio["bytes"]
-
-        with tempfile.NamedTemporaryFile(
-            delete=False,
-            suffix=".wav"
-        ) as temp_audio_file:
-
-            temp_audio_file.write(audio_bytes)
-
-            temp_audio_path = temp_audio_file.name
-
-        with open(temp_audio_path, "rb") as audio_file:
-
-            transcription = client.audio.transcriptions.create(
-                model="whisper-large-v3",
-                file=audio_file
+            pdf_text = extract_text_from_pdf(
+                uploaded_file
             )
 
-        voice_question = transcription.text
+            chunks = split_text(pdf_text)
 
-        st.info(voice_question)
-
-    question = voice_question or text_question
-
-    # =====================================
-    # الإجابة
-    # =====================================
-
-    if question:
-
-        with st.spinner("جاري توليد الإجابة ..."):
-
-            retrieved_chunks = search(
-                question,
-                index,
+            index = create_faiss_index(
                 chunks
             )
 
-            context = "\n\n".join(
-                retrieved_chunks
+            st.session_state.index = index
+
+            st.session_state.chunks = chunks
+
+        st.success(
+            "تمت معالجة الملف بنجاح ✅"
+        )
+
+# =========================================
+# السؤال النصي
+# =========================================
+
+text_question = st.text_input(
+    "✍️ اكتب سؤالك"
+)
+
+# =========================================
+# السؤال الصوتي
+# =========================================
+
+st.write("🎤 أو اسأل بالصوت")
+
+try:
+
+    audio = mic_recorder(
+        start_prompt="ابدأ التسجيل",
+        stop_prompt="إيقاف التسجيل",
+        key="mic"
+    )
+
+except Exception as e:
+
+    st.error(f"Microphone Error: {e}")
+
+    audio = None
+
+voice_question = None
+
+# =========================================
+# تحويل الصوت إلى نص
+# =========================================
+
+if audio:
+
+    audio_bytes = audio["bytes"]
+
+    with tempfile.NamedTemporaryFile(
+        delete=False,
+        suffix=".wav"
+    ) as temp_audio_file:
+
+        temp_audio_file.write(
+            audio_bytes
+        )
+
+        temp_audio_path = (
+            temp_audio_file.name
+        )
+
+    with open(
+        temp_audio_path,
+        "rb"
+    ) as audio_file:
+
+        transcription = (
+            client.audio.transcriptions.create(
+                model="whisper-large-v3",
+                file=audio_file
             )
+        )
 
-            prompt = f"""
-            أجب فقط باستخدام المعلومات الموجودة في النص التالي.
+    voice_question = transcription.text
 
-            إذا لم تجد الإجابة داخل النص قل:
-            "المعلومة غير موجودة في الملف"
+    st.info(voice_question)
 
-            النص:
-            {context}
+# =========================================
+# اختيار السؤال
+# =========================================
 
-            السؤال:
-            {question}
-            """
+question = (
+    voice_question or text_question
+)
 
-            response = client.chat.completions.create(
+# =========================================
+# الإجابة
+# =========================================
+
+if (
+    question and
+    st.session_state.index is not None
+):
+
+    with st.spinner(
+        "جاري توليد الإجابة ..."
+    ):
+
+        retrieved_chunks = search(
+            question,
+            st.session_state.index,
+            st.session_state.chunks
+        )
+
+        context = "\n\n".join(
+            retrieved_chunks
+        )
+
+        prompt = f"""
+        أجب فقط باستخدام النص التالي.
+
+        إذا لم توجد الإجابة قل:
+        "المعلومة غير موجودة في الملف"
+
+        النص:
+        {context}
+
+        السؤال:
+        {question}
+        """
+
+        response = (
+            client.chat.completions.create(
 
                 model="llama-3.3-70b-versatile",
 
@@ -421,8 +527,7 @@ if uploaded_file is not None:
                     {
                         "role": "system",
                         "content": (
-                            "أنت مدرس عربي ذكي يشرح"
-                            " بطريقة سهلة."
+                            "أنت مدرس عربي ذكي"
                         )
                     },
                     {
@@ -433,83 +538,93 @@ if uploaded_file is not None:
 
                 temperature=0.2
             )
+        )
 
-            answer = response.choices[0].message.content
+        answer = (
+            response
+            .choices[0]
+            .message
+            .content
+        )
 
-        # =====================================
-        # عرض الإجابة النصية
-        # =====================================
+    # =====================================
+    # الإجابة النصية
+    # =====================================
 
-        st.subheader("📌 الإجابة")
+    st.subheader("📌 الإجابة")
 
-        st.write(answer)
+    st.write(answer)
 
-        # =====================================
-        # الإجابة الصوتية
-        # =====================================
+    # =====================================
+    # الإجابة الصوتية
+    # =====================================
 
-        audio_path = text_to_speech(
+    audio_path = text_to_speech(
+        answer
+    )
+
+    st.audio(audio_path)
+
+    # =====================================
+    # فيديو Avatar
+    # =====================================
+
+    st.subheader(
+        "🎥 AI Avatar Video"
+    )
+
+    with st.spinner(
+        "جاري إنشاء الفيديو..."
+    ):
+
+        video_url = generate_heygen_video(
             answer
         )
 
-        st.audio(audio_path)
+    if video_url:
 
-        # =====================================
-        # فيديو Avatar
-        # =====================================
+        st.video(video_url)
 
-        st.subheader("🎥 AI Avatar Video")
+    else:
 
-        with st.spinner(
-            "جاري إنشاء فيديو الذكاء الاصطناعي..."
-        ):
+        st.warning(
+            "تعذر إنشاء فيديو AI"
+        )
 
-            video_url = generate_heygen_video(
-                answer
-            )
+    # =====================================
+    # فيديوهات يوتيوب
+    # =====================================
 
-        if video_url:
+    st.subheader(
+        "🎥 فيديوهات تعليمية"
+    )
 
-            st.video(video_url)
+    try:
 
-        else:
+        videos = search_youtube_videos(
+            question + " " + answer[:80]
+        )
 
-            st.warning(
-                "تعذر إنشاء الفيديو حالياً"
-            )
+        for video in videos:
 
-        # =====================================
-        # فيديوهات يوتيوب
-        # =====================================
+            st.write(video["title"])
 
-        st.subheader("🎥 فيديوهات تعليمية مقترحة")
+            st.video(video["url"])
 
-        try:
+    except Exception:
 
-            videos = search_youtube_videos(
-                question + " " + answer[:80]
-            )
+        st.warning(
+            "تعذر تحميل فيديوهات يوتيوب"
+        )
 
-            for video in videos:
+    # =====================================
+    # النصوص المستخدمة
+    # =====================================
 
-                st.write(video["title"])
+    with st.expander(
+        "📄 النصوص المستخدمة"
+    ):
 
-                st.video(video["url"])
+        for chunk in retrieved_chunks:
 
-        except Exception as e:
-
-            st.warning(
-                "تعذر تحميل فيديوهات يوتيوب"
-            )
-
-        # =====================================
-        # النصوص المستخدمة
-        # =====================================
-
-        with st.expander(
-            "📄 النصوص المستخدمة"
-        ):
-
-            for chunk in retrieved_chunks:
-
-                st.info(chunk)
+            st.info(chunk)
