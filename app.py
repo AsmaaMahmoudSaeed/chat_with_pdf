@@ -12,9 +12,6 @@ import tempfile
 import requests
 import time
 
-
-
-
 # =========================
 # CONFIG
 # =========================
@@ -24,9 +21,9 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("📘🤖 AI Smart Teacher (Advanced RAG)")
+st.title("📘🤖 AI Smart Teacher (Advanced RAG + Avatar)")
 
-st.write("مدرس ذكي يعتمد على محتوى PDF فقط")
+st.write("مدرس ذكي يعتمد على PDF + صوت + فيديو Avatar")
 
 # =========================
 # KEYS
@@ -54,7 +51,7 @@ def load_model():
 model = load_model()
 
 # =========================
-# PDF EXTRACTION
+# PDF FUNCTIONS
 # =========================
 
 def extract_pdf(file):
@@ -66,15 +63,12 @@ def extract_pdf(file):
             text += t + "\n"
     return text
 
-# =========================
-# CHUNKING
-# =========================
 
 def chunk_text(text, size=500):
     return [text[i:i+size] for i in range(0, len(text), size)]
 
 # =========================
-# BUILD EMBEDDINGS
+# EMBEDDINGS
 # =========================
 
 def build_embeddings(chunks):
@@ -82,7 +76,7 @@ def build_embeddings(chunks):
     return np.array(embeddings, dtype=np.float32)
 
 # =========================
-# SEMANTIC SEARCH
+# SEARCH
 # =========================
 
 def search(query, chunks, embeddings):
@@ -98,7 +92,7 @@ def search(query, chunks, embeddings):
     return context
 
 # =========================
-# TTS
+# TEXT TO SPEECH
 # =========================
 
 def speak(text):
@@ -108,7 +102,7 @@ def speak(text):
     return file.name
 
 # =========================
-# D-ID VIDEO
+# D-ID AVATAR
 # =========================
 
 def generate_did_video(text):
@@ -231,7 +225,7 @@ if file:
 q = st.text_input("✍️ اسأل سؤال")
 
 # =========================
-# MAIN
+# MAIN LOGIC
 # =========================
 
 if q and st.session_state.chunks is not None:
@@ -267,56 +261,55 @@ if q and st.session_state.chunks is not None:
     answer = response.choices[0].message.content
 
     # =========================
-    # OUTPUT
+    # ANSWER
     # =========================
 
     st.subheader("📌 الإجابة")
     st.write(answer)
 
+    # =========================
     # AUDIO
+    # =========================
+
     audio = speak(answer)
     st.audio(audio)
 
     # =========================
-    # D-ID VIDEO
+    # AVATAR VIDEO (CUSTOM SIZE)
     # =========================
 
     st.subheader("🎬 شرح بالفيديو (Avatar)")
 
-video = generate_did_video(answer)
+    video_url = generate_did_video(answer)
 
-if video:
+    if video_url:
 
-    st.success("تم إنشاء الفيديو بنجاح ✅")
+        st.success("تم إنشاء الفيديو بنجاح ✅")
 
-    st.markdown(
-        f"""
-        <div style="display:flex; justify-content:center;">
-            <div style="border-radius:15px; overflow:hidden; box-shadow:0px 4px 20px rgba(0,0,0,0.2);">
-                <video width="420" height="260" controls>
-                    <source src="{video}" type="video/mp4">
-                </video>
+        st.markdown(
+            f"""
+            <div style="display:flex; justify-content:center;">
+                <div style="border-radius:15px; overflow:hidden; box-shadow:0px 4px 20px rgba(0,0,0,0.2);">
+                    <video width="420" height="260" controls>
+                        <source src="{video_url}" type="video/mp4">
+                    </video>
+                </div>
             </div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+            """,
+            unsafe_allow_html=True
+        )
 
-else:
+    else:
 
-    st.warning("تعذر إنشاء فيديو Avatar (D-ID)")
+        st.warning("تعذر إنشاء فيديو Avatar")
 
-    st.info("سيتم عرض الشرح الصوتي فقط")
-
-    audio = speak(answer)
-
-    st.audio(audio)
+        st.info("سيتم عرض الشرح الصوتي فقط")
 
     # =========================
     # YOUTUBE
     # =========================
 
-    st.subheader("🎥 فيديوهات شرح")
+    st.subheader("🎥 فيديوهات شرح إضافية")
 
     vids = youtube(q)
 
