@@ -6,541 +6,261 @@ from PyPDF2 import PdfReader
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from openai import OpenAI
-from streamlit_mic_recorder import mic_recorder
 from gtts import gTTS
 import tempfile
 import requests
 import time
+import base64
 
-# =========================================
-# PAGE CONFIG
-# =========================================
+# =========================
+# CONFIG
+# =========================
 
-st.set_page_config(
-    page_title="AI PDF Avatar Tutor",
-    layout="wide"
-)
+st.set_page_config(page_title="AI PDF Tutor (D-ID)", layout="wide")
 
-st.title("📄🤖 AI PDF Avatar Tutor")
+st.title("📄🤖 AI PDF Tutor (D-ID Avatar)")
 
-st.write("✅ System Ready")
+st.write("Powered by D-ID Avatar System")
 
-# =========================================
-# API KEYS
-# =========================================
+# =========================
+# SECRETS
+# =========================
 
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
-HEYGEN_API_KEY = st.secrets["HEYGEN_API_KEY"]
-YOUTUBE_API_KEY = st.secrets["YOUTUBE_API_KEY"]
-
-# =========================================
-# GROQ CLIENT
-# =========================================
+DID_API_KEY = st.secrets["DID_API_KEY"]
+DID_API_URL = "https://api.d-id.com/talks"
 
 client = OpenAI(
     api_key=GROQ_API_KEY,
     base_url="https://api.groq.com/openai/v1"
 )
 
-# =========================================
-# PDF EXTRACTION
-# =========================================
+# =========================
+# PDF
+# =========================
 
 def extract_pdf(file):
-
     reader = PdfReader(file)
-
     text = ""
-
-    for page in reader.pages:
-
-        t = page.extract_text()
-
+    for p in reader.pages:
+        t = p.extract_text()
         if t:
             text += t
-
     return text
 
-# =========================================
-# CHUNKING
-# =========================================
 
 def chunk_text(text, size=500):
+    return [text[i:i+size] for i in range(0, len(text), size)]
 
-    chunks = []
+# =========================
+# SEARCH (TF-IDF)
+# =========================
 
-    for i in range(0, len(text), size):
-
-        chunks.append(
-            text[i:i+size]
-        )
-
-    return chunks
-
-# =========================================
-# TF-IDF SEARCH
-# =========================================
-
-def build_search_engine(chunks):
-
+def build_index(chunks):
     vectorizer = TfidfVectorizer()
-
     vectors = vectorizer.fit_transform(chunks)
-
     return vectorizer, vectors
 
-# =========================================
-# SEARCH
-# =========================================
 
 def search(query, vectorizer, vectors, chunks):
+    qv = vectorizer.transform([query])
+    scores = cosine_similarity(qv, vectors).flatten()
+    idx = scores.argsort()[-3:][::-1]
+    return [chunks[i] for i in idx]
 
-    query_vector = vectorizer.transform([query])
-
-    similarities = cosine_similarity(
-        query_vector,
-        vectors
-    ).flatten()
-
-    top_indices = similarities.argsort()[-3:][::-1]
-
-    results = []
-
-    for idx in top_indices:
-
-        results.append(chunks[idx])
-
-    return results
-
-# =========================================
-# TEXT TO SPEECH
-# =========================================
+# =========================
+# TTS fallback
+# =========================
 
 def speak(text):
-
-    tts = gTTS(
-        text=text,
-        lang="ar"
-    )
-
-    file = tempfile.NamedTemporaryFile(
-        delete=False,
-        suffix=".mp3"
-    )
-
+    tts = gTTS(text=text, lang="ar")
+    file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
     tts.save(file.name)
-
     return file.name
 
-# =========================================
-# HEYGEN VIDEO
-# =========================================
+# =========================
+# D-ID AVATAR VIDEO
+# =========================
 
-def generate_heygen_video(text):
-
-    text = text[:300]
-
-    url = "https://api.heygen.com/v2/video/generate"
+def generate_did_video(text):
 
     headers = {
-
-        "X-Api-Key": HEYGEN_API_KEY,
-
+        "Authorization": f"Basic {DID_API_KEY}",
         "Content-Type": "application/json"
     }
 
     payload = {
-
-        "video_inputs": [
-
-            {
-
-                "character": {
-
-                    "type": "avatar",
-
-                    "avatar_id": "Daisy-inskirt-20220818"
-                },
-
-                "voice": {
-
-                    "type": "text",
-
-                    "input_text": text
-                },
-
-                "background": {
-
-                    "type": "color",
-
-                    "value": "#ffffff"
-                }
+        "source_url": "https://create-images-results.d-id.com/DefaultPresenters/Noelle_f/image.png",
+        "script": {
+            "type": "text",
+            "input": text[:500],
+            "provider": {
+                "type": "microsoft",
+                "voice_id": "ar-EG-SalmaNeural"
             }
-        ]
+        }
     }
 
     try:
+        r = requests.post(DID_API_URL, json=payload, headers=headers)
+        data = r.json()
 
-        response = requests.post(
-            url,
-            headers=headers,
-            json=payload,
-            timeout=60
-        )
-
-        data = response.json()
-
-        st.write("HeyGen Response")
+        st.write("D-ID Response")
         st.json(data)
 
-        if not data.get("data"):
-
+        talk_id = data.get("id")
+        if not talk_id:
             return None
 
-        video_id = data["data"].get(
-            "video_id"
-        )
+        # polling
+        status_url = f"https://api.d-id.com/talks/{talk_id}"
 
-        if not video_id:
+        for _ in range(30):
+            res = requests.get(status_url, headers=headers)
+            s = res.json()
 
-            return None
+            if s.get("status") == "done":
+                return s["result_url"]
 
-        status_url = (
-            f"https://api.heygen.com/v1/video_status.get?video_id={video_id}"
-        )
-
-        for _ in range(24):
-
-            r = requests.get(
-                status_url,
-                headers=headers
-            )
-
-            s = r.json()
-
-            if not s.get("data"):
-
-                time.sleep(5)
-
-                continue
-
-            status = s["data"].get(
-                "status"
-            )
-
-            if status == "completed":
-
-                return s["data"].get(
-                    "video_url"
-                )
-
-            if status == "failed":
-
-                st.error(
-                    "Video generation failed"
-                )
-
-                st.json(s)
-
+            if s.get("status") == "error":
                 return None
 
-            time.sleep(5)
+            time.sleep(3)
 
         return None
 
     except Exception as e:
-
-        st.error(f"HeyGen Error: {e}")
-
+        st.error(f"D-ID Error: {e}")
         return None
 
-# =========================================
-# YOUTUBE SEARCH
-# =========================================
+# =========================
+# YOUTUBE
+# =========================
 
 def search_youtube(query):
+    key = st.secrets["YOUTUBE_API_KEY"]
 
     url = "https://www.googleapis.com/youtube/v3/search"
 
     params = {
-
         "part": "snippet",
-
         "q": query + " شرح عربي",
-
-        "key": YOUTUBE_API_KEY,
-
+        "key": key,
         "maxResults": 3,
-
         "type": "video",
-
         "relevanceLanguage": "ar"
     }
 
-    response = requests.get(
-        url,
-        params=params
-    )
-
-    data = response.json()
+    r = requests.get(url, params=params)
+    data = r.json()
 
     videos = []
 
     for item in data.get("items", []):
-
-        video_id = item["id"]["videoId"]
-
+        vid = item["id"]["videoId"]
         title = item["snippet"]["title"]
-
         videos.append({
-
             "title": title,
-
-            "url": f"https://www.youtube.com/watch?v={video_id}"
+            "url": f"https://www.youtube.com/watch?v={vid}"
         })
 
     return videos
 
-# =========================================
-# SESSION STATE
-# =========================================
+# =========================
+# SESSION
+# =========================
 
 if "vectorizer" not in st.session_state:
-
     st.session_state.vectorizer = None
-
-if "vectors" not in st.session_state:
-
     st.session_state.vectors = None
-
-if "chunks" not in st.session_state:
-
     st.session_state.chunks = None
 
-# =========================================
-# PDF UPLOAD
-# =========================================
+# =========================
+# UI
+# =========================
 
-uploaded_file = st.file_uploader(
-    "📄 Upload PDF",
-    type="pdf"
-)
+file = st.file_uploader("Upload PDF", type="pdf")
 
-if uploaded_file:
+if file and st.session_state.vectorizer is None:
+    text = extract_pdf(file)
+    chunks = chunk_text(text)
 
-    if st.session_state.vectorizer is None:
+    vectorizer, vectors = build_index(chunks)
 
-        with st.spinner("Processing PDF..."):
+    st.session_state.vectorizer = vectorizer
+    st.session_state.vectors = vectors
+    st.session_state.chunks = chunks
 
-            text = extract_pdf(uploaded_file)
+    st.success("PDF Loaded ✅")
 
-            chunks = chunk_text(text)
+question = st.text_input("Ask your question")
 
-            vectorizer, vectors = build_search_engine(chunks)
+# =========================
+# MAIN LOGIC
+# =========================
 
-            st.session_state.vectorizer = vectorizer
+if question and st.session_state.vectorizer:
 
-            st.session_state.vectors = vectors
-
-            st.session_state.chunks = chunks
-
-        st.success("✅ PDF Ready")
-
-# =========================================
-# TEXT QUESTION
-# =========================================
-
-question = st.text_input(
-    "✍️ Ask your question"
-)
-
-# =========================================
-# VOICE QUESTION
-# =========================================
-
-st.write("🎤 Voice Question")
-
-try:
-
-    audio = mic_recorder(
-
-        start_prompt="🎤 Start Recording",
-
-        stop_prompt="⛔ Stop Recording",
-
-        key="mic"
+    context = search(
+        question,
+        st.session_state.vectorizer,
+        st.session_state.vectors,
+        st.session_state.chunks
     )
 
-except Exception as e:
+    prompt = f"""
+    أجب من النص فقط:
 
-    st.error(f"Microphone Error: {e}")
+    {context}
 
-    audio = None
+    السؤال: {question}
+    """
 
-voice_text = None
-
-# =========================================
-# SPEECH TO TEXT
-# =========================================
-
-if audio:
-
-    audio_file = tempfile.NamedTemporaryFile(
-        delete=False,
-        suffix=".wav"
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[
+            {"role": "system", "content": "أنت مدرس عربي"},
+            {"role": "user", "content": prompt}
+        ]
     )
 
-    audio_file.write(audio["bytes"])
-
-    audio_file.close()
-
-    with open(audio_file.name, "rb") as f:
-
-        result = client.audio.transcriptions.create(
-
-            model="whisper-large-v3",
-
-            file=f
-        )
-
-        voice_text = result.text
-
-    st.info(voice_text)
-
-# =========================================
-# FINAL QUESTION
-# =========================================
-
-final_question = voice_text or question
-
-# =========================================
-# ANSWER GENERATION
-# =========================================
-
-if (
-    final_question and
-    st.session_state.vectorizer is not None
-):
-
-    with st.spinner("Generating Answer..."):
-
-        retrieved_chunks = search(
-
-            final_question,
-
-            st.session_state.vectorizer,
-
-            st.session_state.vectors,
-
-            st.session_state.chunks
-        )
-
-        context = "\n".join(retrieved_chunks)
-
-        prompt = f"""
-        أجب فقط من النص التالي:
-
-        {context}
-
-        السؤال:
-        {final_question}
-        """
-
-        response = client.chat.completions.create(
-
-            model="llama-3.3-70b-versatile",
-
-            messages=[
-
-                {
-                    "role": "system",
-                    "content": "أنت مدرس عربي ذكي"
-                },
-
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-
-            temperature=0.2
-        )
-
-        answer = response.choices[0].message.content
-
-    # =====================================
-    # ANSWER
-    # =====================================
+    answer = response.choices[0].message.content
 
     st.subheader("📌 Answer")
-
     st.write(answer)
 
-    # =====================================
     # AUDIO
-    # =====================================
+    audio = speak(answer)
+    st.audio(audio)
 
-    audio_path = speak(answer)
+    # =========================
+    # D-ID VIDEO
+    # =========================
 
-    st.audio(audio_path)
+    st.subheader("🎬 AI Avatar (D-ID)")
 
-    # =====================================
-    # AVATAR VIDEO
-    # =====================================
-
-    st.subheader("🎬 AI Avatar")
-
-    with st.spinner("Generating AI video..."):
-
-        video = generate_heygen_video(answer)
-
-    # =====================================
-    # SUCCESS
-    # =====================================
+    with st.spinner("Generating video..."):
+        video = generate_did_video(answer)
 
     if video:
-
-        st.success("Avatar generated ✅")
-
+        st.success("Video Ready ✅")
         st.video(video)
-
-    # =====================================
-    # FALLBACK
-    # =====================================
-
     else:
+        st.warning("Fallback Mode (Audio only)")
+        st.info("D-ID video generation failed")
 
-        st.warning(
-            "Avatar API unavailable. Fallback mode activated."
-        )
+    # =========================
+    # YOUTUBE
+    # =========================
 
-        st.image(
-            "https://i.imgur.com/6VBx3io.png",
-            width=300
-        )
-
-        st.info(
-            "Audio explanation is available below."
-        )
-
-    # =====================================
-    # YOUTUBE VIDEOS
-    # =====================================
-
-    st.subheader("🎥 Arabic Educational Videos")
+    st.subheader("🎥 YouTube Explanation")
 
     try:
+        vids = search_youtube(question)
 
-        videos = search_youtube(final_question)
-
-        for v in videos:
-
+        for v in vids:
             st.write(v["title"])
-
             st.video(v["url"])
 
-    except Exception:
-
-        st.warning(
-            "Unable to load YouTube videos"
-        )
+    except:
+        st.warning("YouTube error")
