@@ -1,66 +1,119 @@
 import os
+os.environ["STREAMLIT_WATCHER_TYPE"] = "none"
 
-audio_path = speak(answer)
+import streamlit as st
+from PyPDF2 import PdfReader
+from sentence_transformers import SentenceTransformer
+from openai import OpenAI
+from streamlit_mic_recorder import mic_recorder
+from gtts import gTTS
+import tempfile
+import faiss
+import numpy as np
+import requests
+import time
 
-st.audio(audio_path)
+# =====================================
+# PAGE CONFIG
+# =====================================
 
-# =================================
-# AVATAR VIDEO
-# =================================
+st.set_page_config(
+    page_title="AI PDF Avatar Tutor",
+    layout="wide"
+)
 
-st.subheader("🎬 AI Avatar")
+st.title("📄🤖 AI PDF Avatar Tutor")
 
-with st.spinner("Generating AI video..."):
+# =====================================
+# SECRETS
+# =====================================
 
-    video = generate_heygen_video(answer)
+GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+HEYGEN_API_KEY = st.secrets["HEYGEN_API_KEY"]
+YOUTUBE_API_KEY = st.secrets["YOUTUBE_API_KEY"]
 
-# =================================
-# SUCCESS
-# =================================
+# =====================================
+# GROQ CLIENT
+# =====================================
 
-if video:
+client = OpenAI(
+    api_key=GROQ_API_KEY,
+    base_url="https://api.groq.com/openai/v1"
+)
 
-    st.success("Avatar generated ✅")
+# =====================================
+# EMBEDDING MODEL
+# =====================================
 
-    st.video(video)
-
-# =================================
-# FALLBACK
-# =================================
-
-else:
-
-    st.warning(
-        "Avatar API unavailable. Fallback mode activated."
+@st.cache_resource
+def load_model():
+    return SentenceTransformer(
+        "all-MiniLM-L6-v2"
     )
 
-    st.image(
-        "https://i.imgur.com/6VBx3io.png",
-        width=300
-    )
+model = load_model()
 
-    st.info(
-        "Audio explanation is available below."
-    )
+# =====================================
+# PDF EXTRACTION
+# =====================================
 
-# =================================
-# YOUTUBE VIDEOS
-# =================================
+def extract_pdf(file):
+    # AVATAR VIDEO
+    # =================================
 
-st.subheader("🎥 Arabic Educational Videos")
+    st.subheader("🎬 AI Avatar")
 
-try:
+    with st.spinner("Generating AI video..."):
 
-    videos = search_youtube(final_question)
+        video = generate_heygen_video(answer)
 
-    for v in videos:
+    # =================================
+    # SUCCESS
+    # =================================
 
-        st.write(v["title"])
+    if video:
 
-        st.video(v["url"])
+        st.success("Avatar generated ✅")
 
-except Exception:
+        st.video(video)
 
-    st.warning(
-        "Unable to load YouTube videos"
-    )
+    # =================================
+    # FALLBACK
+    # =================================
+
+    else:
+
+        st.warning(
+            "Avatar API unavailable. Fallback mode activated."
+        )
+
+        st.image(
+            "https://i.imgur.com/6VBx3io.png",
+            width=300
+        )
+
+        st.info(
+            "Audio explanation is available below."
+        )
+
+    # =================================
+    # YOUTUBE VIDEOS
+    # =================================
+
+    st.subheader("🎥 Arabic Educational Videos")
+
+    try:
+
+        videos = search_youtube(final_question)
+
+        for v in videos:
+
+            st.write(v["title"])
+
+            st.video(v["url"])
+
+    except Exception:
+
+        st.warning(
+            "Unable to load YouTube videos"
+        )
