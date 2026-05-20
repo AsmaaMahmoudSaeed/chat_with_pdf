@@ -14,18 +14,7 @@ import time
 
 
 
-st.markdown(
-    f"""
-    <div style="display:flex; justify-content:center;">
-        <div style="border-radius:15px; overflow:hidden;">
-            <video width="420" height="260" controls>
-                <source src="{video_url}" type="video/mp4">
-            </video>
-        </div>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+
 # =========================
 # CONFIG
 # =========================
@@ -292,14 +281,36 @@ if q and st.session_state.chunks is not None:
     # D-ID VIDEO
     # =========================
 
-    st.subheader("🎬 شرح بالفيديو")
+    st.subheader("🎬 شرح بالفيديو (Avatar)")
 
-    video = generate_did_video(answer)
+video = generate_did_video(answer)
 
-    if video:
-        st.video(video)
-    else:
-        st.warning("تعذر إنشاء فيديو (D-ID)")
+if video:
+
+    st.success("تم إنشاء الفيديو بنجاح ✅")
+
+    st.markdown(
+        f"""
+        <div style="display:flex; justify-content:center;">
+            <div style="border-radius:15px; overflow:hidden; box-shadow:0px 4px 20px rgba(0,0,0,0.2);">
+                <video width="420" height="260" controls>
+                    <source src="{video}" type="video/mp4">
+                </video>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+else:
+
+    st.warning("تعذر إنشاء فيديو Avatar (D-ID)")
+
+    st.info("سيتم عرض الشرح الصوتي فقط")
+
+    audio = speak(answer)
+
+    st.audio(audio)
 
     # =========================
     # YOUTUBE
