@@ -8,46 +8,54 @@ import tempfile
 import faiss
 import numpy as np
 import requests
-import os
+import time
 
-# =============================
+# =========================================
 # إعداد الصفحة
-# =============================
+# =========================================
 
 st.set_page_config(
-    page_title="Smart Arabic PDF Tutor",
+    page_title="AI Arabic PDF Avatar Tutor",
     layout="wide"
 )
 
-st.title("📄🎤🤖 Smart Arabic PDF Tutor")
+st.title("📄🎤🤖 AI Arabic PDF Avatar Tutor")
 
-# =============================
+# =========================================
 # API KEYS
-# =============================
+# =========================================
 
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+
 YOUTUBE_API_KEY = st.secrets["YOUTUBE_API_KEY"]
+
+HEYGEN_API_KEY = st.secrets["HEYGEN_API_KEY"]
+
+# =========================================
+# Groq Client
+# =========================================
 
 client = OpenAI(
     api_key=GROQ_API_KEY,
     base_url="https://api.groq.com/openai/v1"
 )
 
-# =============================
-# تحميل نموذج Embedding
-# =============================
+# =========================================
+# Embedding Model
+# =========================================
 
 @st.cache_resource
 def load_embedding_model():
+
     return SentenceTransformer(
         "all-MiniLM-L6-v2"
     )
 
 embedding_model = load_embedding_model()
 
-# =============================
-# قراءة PDF
-# =============================
+# =========================================
+# استخراج النص من PDF
+# =========================================
 
 def extract_text_from_pdf(pdf_file):
 
@@ -60,13 +68,14 @@ def extract_text_from_pdf(pdf_file):
         page_text = page.extract_text()
 
         if page_text:
+
             text += page_text
 
     return text
 
-# =============================
+# =========================================
 # تقسيم النص
-# =============================
+# =========================================
 
 def split_text(text, chunk_size=500):
 
@@ -80,9 +89,9 @@ def split_text(text, chunk_size=500):
 
     return chunks
 
-# =============================
+# =========================================
 # إنشاء FAISS
-# =============================
+# =========================================
 
 def create_faiss_index(chunks):
 
@@ -101,9 +110,9 @@ def create_faiss_index(chunks):
 
     return index
 
-# =============================
+# =========================================
 # البحث
-# =============================
+# =========================================
 
 def search(query, index, chunks, k=3):
 
@@ -122,13 +131,14 @@ def search(query, index, chunks, k=3):
     results = []
 
     for idx in indices[0]:
+
         results.append(chunks[idx])
 
     return results
 
-# =============================
+# =========================================
 # تحويل النص إلى صوت
-# =============================
+# =========================================
 
 def text_to_speech(text):
 
@@ -146,20 +156,26 @@ def text_to_speech(text):
 
     return temp_audio.name
 
-# =============================
+# =========================================
 # البحث في يوتيوب
-# =============================
+# =========================================
 
 def search_youtube_videos(query, max_results=3):
 
     url = "https://www.googleapis.com/youtube/v3/search"
 
     params = {
+
         "part": "snippet",
+
         "q": query + " شرح عربي",
+
         "key": YOUTUBE_API_KEY,
+
         "maxResults": max_results,
+
         "type": "video",
+
         "relevanceLanguage": "ar"
     }
 
@@ -178,7 +194,9 @@ def search_youtube_videos(query, max_results=3):
 
         title = item["snippet"]["title"]
 
-        video_url = f"https://www.youtube.com/watch?v={video_id}"
+        video_url = (
+            f"https://www.youtube.com/watch?v={video_id}"
+        )
 
         videos.append({
             "title": title,
@@ -187,18 +205,107 @@ def search_youtube_videos(query, max_results=3):
 
     return videos
 
-# =============================
+# =========================================
+# إنشاء فيديو HeyGen
+# =========================================
+
+def generate_heygen_video(answer_text):
+
+    url = "https://api.heygen.com/v2/video/generate"
+
+    headers = {
+
+        "X-Api-Key": HEYGEN_API_KEY,
+
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+
+        "video_inputs": [
+
+            {
+
+                "character": {
+
+                    "type": "avatar",
+
+                    "avatar_id": "Daisy-inskirt-20220818"
+                },
+
+                "voice": {
+
+                    "type": "text",
+
+                    "input_text": answer_text,
+
+                    "voice_id": "ar-SA-HamedNeural"
+                },
+
+                "background": {
+
+                    "type": "color",
+
+                    "value": "#f6f6f6"
+                }
+            }
+        ]
+    }
+
+    response = requests.post(
+        url,
+        headers=headers,
+        json=payload
+    )
+
+    data = response.json()
+
+    if "data" not in data:
+
+        return None
+
+    video_id = data["data"]["video_id"]
+
+    # =====================================
+    # انتظار تجهيز الفيديو
+    # =====================================
+
+    status_url = (
+        f"https://api.heygen.com/v1/video_status.get?video_id={video_id}"
+    )
+
+    for _ in range(30):
+
+        status_response = requests.get(
+            status_url,
+            headers=headers
+        )
+
+        status_data = status_response.json()
+
+        if (
+            "data" in status_data and
+            status_data["data"]["status"] == "completed"
+        ):
+
+            return status_data["data"]["video_url"]
+
+        time.sleep(5)
+
+    return None
+
+# =========================================
 # رفع PDF
-# =============================
+# =========================================
 
 uploaded_file = st.file_uploader(
     "Upload PDF",
     type="pdf"
 )
 
-if uploaded_file:
+if uploaded_file is not None:
 
-    with st.spinner("معالجة الملف ..."):
+    with st.spinner("جاري معالجة PDF ..."):
 
         pdf_text = extract_text_from_pdf(
             uploaded_file
@@ -210,29 +317,41 @@ if uploaded_file:
             chunks
         )
 
-    st.success("تمت المعالجة ✅")
+    st.success("تمت معالجة الملف بنجاح ✅")
 
-    # =========================
+    # =====================================
     # سؤال نصي
-    # =========================
+    # =====================================
 
     text_question = st.text_input(
         "✍️ اكتب سؤالك"
     )
 
-    # =========================
+    # =====================================
     # سؤال صوتي
-    # =========================
+    # =====================================
 
     st.write("🎤 أو اسأل بالصوت")
 
-    audio = mic_recorder(
-        start_prompt="ابدأ التسجيل",
-        stop_prompt="إيقاف التسجيل",
-        key="mic"
-    )
+    try:
+
+        audio = mic_recorder(
+            start_prompt="ابدأ التسجيل",
+            stop_prompt="إيقاف التسجيل",
+            key="mic"
+        )
+
+    except Exception as e:
+
+        st.error(f"Microphone Error: {e}")
+
+        audio = None
 
     voice_question = None
+
+    # =====================================
+    # تحويل الصوت إلى نص
+    # =====================================
 
     if audio:
 
@@ -260,9 +379,13 @@ if uploaded_file:
 
     question = voice_question or text_question
 
+    # =====================================
+    # الإجابة
+    # =====================================
+
     if question:
 
-        with st.spinner("جاري التوليد ..."):
+        with st.spinner("جاري توليد الإجابة ..."):
 
             retrieved_chunks = search(
                 question,
@@ -270,15 +393,15 @@ if uploaded_file:
                 chunks
             )
 
-            context = "\n".join(
+            context = "\n\n".join(
                 retrieved_chunks
             )
 
             prompt = f"""
-            أجب فقط باستخدام النص التالي.
+            أجب فقط باستخدام المعلومات الموجودة في النص التالي.
 
-            إذا لم توجد الإجابة قل:
-            المعلومة غير موجودة في الملف
+            إذا لم تجد الإجابة داخل النص قل:
+            "المعلومة غير موجودة في الملف"
 
             النص:
             {context}
@@ -288,28 +411,39 @@ if uploaded_file:
             """
 
             response = client.chat.completions.create(
+
                 model="llama-3.3-70b-versatile",
+
                 messages=[
                     {
                         "role": "system",
-                        "content": "أنت مدرس عربي ذكي."
+                        "content": (
+                            "أنت مدرس عربي ذكي يشرح"
+                            " بطريقة سهلة."
+                        )
                     },
                     {
                         "role": "user",
                         "content": prompt
                     }
                 ],
+
                 temperature=0.2
             )
 
             answer = response.choices[0].message.content
 
+        # =====================================
+        # عرض الإجابة النصية
+        # =====================================
+
         st.subheader("📌 الإجابة")
+
         st.write(answer)
 
-        # =========================
-        # صوت الإجابة
-        # =========================
+        # =====================================
+        # الإجابة الصوتية
+        # =====================================
 
         audio_path = text_to_speech(
             answer
@@ -317,27 +451,62 @@ if uploaded_file:
 
         st.audio(audio_path)
 
-        # =========================
+        # =====================================
+        # فيديو Avatar
+        # =====================================
+
+        st.subheader("🎥 AI Avatar Video")
+
+        with st.spinner(
+            "جاري إنشاء فيديو الذكاء الاصطناعي..."
+        ):
+
+            video_url = generate_heygen_video(
+                answer
+            )
+
+        if video_url:
+
+            st.video(video_url)
+
+        else:
+
+            st.warning(
+                "تعذر إنشاء الفيديو حالياً"
+            )
+
+        # =====================================
         # فيديوهات يوتيوب
-        # =========================
+        # =====================================
 
-        st.subheader("🎥 فيديوهات مقترحة")
+        st.subheader("🎥 فيديوهات تعليمية مقترحة")
 
-        videos = search_youtube_videos(
-            question + " " + answer[:80]
-        )
+        try:
 
-        for video in videos:
+            videos = search_youtube_videos(
+                question + " " + answer[:80]
+            )
 
-            st.write(video["title"])
+            for video in videos:
 
-            st.video(video["url"])
+                st.write(video["title"])
 
-        # =========================
+                st.video(video["url"])
+
+        except Exception as e:
+
+            st.warning(
+                "تعذر تحميل فيديوهات يوتيوب"
+            )
+
+        # =====================================
         # النصوص المستخدمة
-        # =========================
+        # =====================================
 
-        with st.expander("النصوص المستخدمة"):
+        with st.expander(
+            "📄 النصوص المستخدمة"
+        ):
 
             for chunk in retrieved_chunks:
+
                 st.info(chunk)
