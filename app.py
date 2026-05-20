@@ -12,6 +12,20 @@ import tempfile
 import requests
 import time
 
+
+
+st.markdown(
+    f"""
+    <div style="display:flex; justify-content:center;">
+        <div style="border-radius:15px; overflow:hidden;">
+            <video width="420" height="260" controls>
+                <source src="{video_url}" type="video/mp4">
+            </video>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 # =========================
 # CONFIG
 # =========================
