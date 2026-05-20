@@ -1,74 +1,66 @@
 import os
 
-    st.subheader("📌 Answer")
+audio_path = speak(answer)
 
-    st.write(answer)
+st.audio(audio_path)
 
-    # =================================
-    # AUDIO
-    # =================================
+# =================================
+# AVATAR VIDEO
+# =================================
 
-    audio_path = speak(answer)
+st.subheader("🎬 AI Avatar")
 
-    st.audio(audio_path)
+with st.spinner("Generating AI video..."):
 
-    # =================================
-    # AVATAR VIDEO
-    # =================================
+    video = generate_heygen_video(answer)
 
-    st.subheader("🎬 AI Avatar")
+# =================================
+# SUCCESS
+# =================================
 
-    with st.spinner("Generating AI video..."):
+if video:
 
-        video = generate_heygen_video(answer)
+    st.success("Avatar generated ✅")
 
-    # =================================
-    # SUCCESS
-    # =================================
+    st.video(video)
 
-    if video:
+# =================================
+# FALLBACK
+# =================================
 
-        st.success("Avatar generated ✅")
+else:
 
-        st.video(video)
+    st.warning(
+        "Avatar API unavailable. Fallback mode activated."
+    )
 
-    # =================================
-    # FALLBACK
-    # =================================
+    st.image(
+        "https://i.imgur.com/6VBx3io.png",
+        width=300
+    )
 
-    else:
+    st.info(
+        "Audio explanation is available below."
+    )
 
-        st.warning(
-            "Avatar API unavailable. Fallback mode activated."
-        )
+# =================================
+# YOUTUBE VIDEOS
+# =================================
 
-        st.image(
-            "https://i.imgur.com/6VBx3io.png",
-            width=300
-        )
+st.subheader("🎥 Arabic Educational Videos")
 
-        st.info(
-            "Audio explanation is available below."
-        )
+try:
 
-    # =================================
-    # YOUTUBE VIDEOS
-    # =================================
+    videos = search_youtube(final_question)
 
-    st.subheader("🎥 Arabic Educational Videos")
+    for v in videos:
 
-    try:
+        st.write(v["title"])
 
-        videos = search_youtube(final_question)
+        st.video(v["url"])
 
-        for v in videos:
+except Exception:
 
-            st.write(v["title"])
-
-            st.video(v["url"])
-
-    except Exception:
-
-        st.warning(
-            "Unable to load YouTube videos"
-        )
+    st.warning(
+        "Unable to load YouTube videos"
+    )
